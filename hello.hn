@@ -1,0 +1,92 @@
+// connotation：内包する、ここではHINATA_DEFMODEクラス（コーディングルールに沿ってコンパイラの動作をカスタム）とHDSクラス（データベース操作クラス）を使用する
+connotation HINATA_DEFMODE;
+connotation HDS;
+
+
+// indentオプション：インデント強制、ここではスペース4つ分のインデントを強制
+// dynamic_type_toleranceモード：動的型付け許容モード、ここでは完全な静的型付けを強制
+// academic_research_usageモード：学術研究利用モード（RStudioやJupyterのような任意行の実行）を許容するか、ここでは許容しない。
+decl lock array mode = [
+    "indent" : "struct|4",
+    "dynamic_type_tolerance" : false,
+    "academic_research_usage" : false
+]
+
+// decl：declaration、宣言。ここではHINATA_DEFMODE_instanceを予期する変数「hntdm」を宣言し、HINATA_DEFMODE_instanceを代入。
+// CLASSNAME_instance　とすると、指定クラスのインスタンスのみを許容可能
+decl HINATA_DEFMODE_instance hntdm = HINATA_DEFMODE(mode);
+
+// =>：メソッド呼び出し、ここではコーディングルールの対象範囲を広域（すべてのファイル）へ設定するメソッドを呼び出し
+hntdm=>setWideArea();
+
+// decl 型名・インスタンス　変数名で変数定義ができる
+decl string str = "Hello, HiNaTa!";
+decl integer counter = 0;
+// lock：定義後の値変更禁止、他言語のconstやfinalと同義
+lock string locked_str = "This variable can't change!";
+
+// fixed関数：関数定義後の再定義を禁じる
+fix fn Say_HelloWorld(){
+    say("Hello, World!");
+}
+
+// 通常関数：関数定義後に書き換えが可能。
+// str->string：変数名->型とすることで、引数として受取可能な型を指定
+fn Say_String(str->string){
+    say(str);
+}
+
+// returned->：返り値の型定義、唯一最大2つまでの曖昧な型定義が可能。失敗したらboolean、それ以外はHDS_CONNECTION_instance(HDSの接続後クラスのインスタンス)を返却
+fix fn Connect_DB() returned->HDS_CONNECTION_instance|boolean {
+    decl string hds_dsn = "type=mysql,db=hinata_test,user=root,pass=root"
+    decl HDS_instance hds = make HDS(hds_dsn);
+    hds=>setOption("warntype=>throw");
+    hds=>setOption("charcterset=>UTF-8");
+    
+    out hds=>connectStart(failed_return = "boolean");
+}
+
+// 関数定義
+Say_HelloWorld();
+Say_String(str);
+
+// 通常のファンクションなのでエラーにならない(OverWritable Function)
+Say_String(str->string, loop->int = 1){
+    loop(loop){
+        say(str);
+    }
+}
+
+// fixファンクションなのでエラーになる(Fixed Function)
+Say_HelloWorld(){
+    say("Hello! 世界!");
+}
+
+// 型名を「reference_fn」とすることで、関数の返り値の型定義がそのまま許容される。しかし、「関数の返り値」である必要がある。
+lock reference_fn db_connect = Connect_DB();
+
+// 変数名(または値) ? 型　とすることで、その変数や値が指定の型かどうかを判別可能
+if(db_connect ? boolean){
+    // down関数は処理内容に問題がある場合に、不正終了としてプログラムを終了させる場合に使用する関数
+    down("データベース接続エラー");
+}
+
+// see/issue：seeに試行する処理、issueにseeで問題が発生した場合の処理
+see{
+    db_connect=>transaction();
+    db_connect=>sql("INSERT INTO hinata_say (text) VALUES (?)");
+    db_connect=>varexp([str]);
+    decl boolean result = db_connect=>exec();
+    if(result){
+        db_connect=>commit();
+        // end_all関数はプログラムに問題がなく、正常に終了させたい場合に使用する関数。
+        end_all("ソース終了");
+    }else{
+        db_connect=>rollback();
+        down("インサートに失敗")
+    }
+// issueの引数には「例外クラス名 変数名」を渡す
+}issue(HDS_Exception hds_e){
+    db_connect=>rollback();
+    down($hds_e=>Message());
+}
